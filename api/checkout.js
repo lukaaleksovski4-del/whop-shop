@@ -3,7 +3,7 @@ import axios from 'axios';
 
 const whop = new Whop(process.env.WHOP_API_KEY);
 
-// Функција за генерирање на привремен Shopify клуч (2026 метод)
+// Function to generate Shopify Access Token (2026 method)
 async function getShopifyToken() {
   const url = `https://${process.env.SHOPIFY_DOMAIN}/admin/oauth/access_token`;
   const response = await axios.post(url, {
@@ -15,7 +15,7 @@ async function getShopifyToken() {
 }
 
 export default async function handler(req, res) {
-  // Дозволуваме Shopify да збори со овој код (CORS)
+  // Allow Shopify to talk to this code (CORS)
   res.setHeader('Access-Control-Allow-Credentials', true);
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,POST');
@@ -24,23 +24,23 @@ export default async function handler(req, res) {
   if (req.method === 'OPTIONS') return res.status(200).end();
 
   try {
-    // ДЕЛ 1: КРЕИРАЊЕ ЛИНК ЗА НАПЛАТА (Кога кликаат КУПИ)
+    // PART 1: CREATE CHECKOUT LINK (When user clicks BUY NOW)
     if (req.body.action === 'create_checkout') {
       const { items, email } = req.body;
       
-      // Пресметуваме цена
+      // Calculate total price
       let totalCents = items.reduce((sum, item) => sum + item.price * item.quantity, 0);
 
-      // Пакуваме информации за Shopify
+      // Pack data for Shopify
       const cartData = items.map(i => ({ id: i.variant_id, qty: i.quantity }));
 
-      // Бараме линк од Whop
+      // Request link from Whop
       const checkout = await whop.checkoutConfigurations.create({
         plan: {
           plan_type: 'one_time',
-          initial_price: totalCents / 100, // Whop сака долари
+          initial_price: totalCents / 100, // Whop needs dollars
           currency: 'usd',
-          title: 'Naracka'
+          title: 'Order from Webshop' // <--- CHANGED TO ENGLISH
         },
         metadata: {
           shopify_payload: JSON.stringify(cartData),
@@ -54,7 +54,7 @@ export default async function handler(req, res) {
       return res.status(200).json({ url: checkout.purchase_url });
     }
 
-    // ДЕЛ 2: АВТОМАТСКИ ВНЕС ВО SHOPIFY (Откако ќе платат)
+    // PART 2: SYNC TO SHOPIFY (After payment)
     if (req.body.type === 'payment.succeeded') {
       const payment = req.body.data;
       const metadata = payment.metadata |
@@ -63,7 +63,7 @@ export default async function handler(req, res) {
       
       if (!metadata.shopify_payload) return res.status(200).send('Ok');
 
-      // 1. Земаме свеж клуч од Shopify
+      // 1. Get fresh Shopify Token
       const shopifyToken = await getShopifyToken();
       
       const items = JSON.parse(metadata.shopify_payload);
@@ -71,13 +71,13 @@ export default async function handler(req, res) {
 
 | metadata.customer_email;
 
-      // 2. Внесуваме нарачка
+      // 2. Create Order in Shopify
       await axios.post(
         `https://${process.env.SHOPIFY_DOMAIN}/admin/api/2024-01/orders.json`,
         {
           order: {
             email: userEmail,
-            financial_status: 'paid', // Ова прави да пишува PAID
+            financial_status: 'paid', // Marks as PAID
             tags: 'Whop Order',
             line_items: items.map(i => ({ variant_id: i.id, quantity: i.qty })),
             note: `Whop Payment ID: ${payment.id}`
