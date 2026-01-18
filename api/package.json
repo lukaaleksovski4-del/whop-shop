@@ -1,6 +1,6 @@
 {
   "dependencies": {
-    "@whop/sdk": "^1.0.0",
-    "axios": "^1.6.0"
+    "@whop/sdk": "latest",
+    "axios": "latest"
   }
 }
