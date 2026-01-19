@@ -1,7 +1,7 @@
 import { Whop } from '@whop/sdk';
 import axios from 'axios';
 
-// This uses the NEW KEY you just updated in Vercel
+// Ensure this uses the NEW key you generated: apik_WZY...
 const whop = new Whop(process.env.WHOP_API_KEY);
 
 async function getShopifyToken() {
@@ -23,23 +23,26 @@ export default async function handler(req, res) {
   if (req.method === 'OPTIONS') return res.status(200).end();
 
   try {
-    // --- CREATE CHECKOUT ---
+    // --- 1. CREATE CHECKOUT LINK ---
     if (req.body.action === 'create_checkout') {
       const { items, email } = req.body;
       
+      // Calculate total
       let totalCents = items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
-      const cartData = items.map(i => ({ id: i.variant_id, qty: i.quantity }));
-
-      // FIX: Round to whole number to prevent "Nothing to see here" error
+      
+      // ⚠️ THE FIX: Force the price to be a whole number (Integer)
+      // This stops the "Nothing to see here" error.
       const finalPrice = Math.round(totalCents);
+
+      const cartData = items.map(i => ({ id: i.variant_id, qty: i.quantity }));
 
       const checkout = await whop.checkoutConfigurations.create({
         plan: {
           plan_type: 'one_time',
-          initial_price: finalPrice, 
+          initial_price: finalPrice, // Uses the rounded price
           currency: 'usd',
           title: 'Order from Demano',
-          company_id: 'biz_9ouoqD0evDHrfC' // This is the ID from your link
+          company_id: 'biz_9ouoqD0evDHrfC' // Confirmed correct ID
         },
         metadata: {
           shopify_payload: JSON.stringify(cartData),
@@ -51,7 +54,7 @@ export default async function handler(req, res) {
       return res.status(200).json({ url: checkout.url || checkout.purchase_url });
     }
 
-    // --- PAYMENT SUCCEEDED ---
+    // --- 2. PAYMENT SUCCESS (Send to Shopify) ---
     if (req.body.type === 'payment.succeeded') {
       const payment = req.body.data;
       const metadata = payment.metadata || {};
@@ -79,7 +82,7 @@ export default async function handler(req, res) {
       return res.status(200).send('Success');
     }
   } catch (err) {
-    console.error("Error:", err.message);
+    console.error(err);
     return res.status(500).json({ error: err.message });
   }
 }
