@@ -22,22 +22,16 @@ export default async function handler(req, res) {
   if (req.method === 'OPTIONS') return res.status(200).end();
 
   try {
-    // --- 1. КРЕИРАЊЕ ЛИНК (CREATE CHECKOUT) ---
+    // --- CREATE CHECKOUT ---
     if (req.body.action === 'create_checkout') {
       const { items, email } = req.body;
       
-      // Пресметка на цена
-      let total = items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+      // 1. Calculate Total
+      let totalCents = items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
       
-      // БЕЗБЕДНОСТ: Ако Shopify праќа долари (пр. 1.10), правиме центи. 
-      // Ако праќа центи (110), останува исто.
-      // (Претпоставуваме дека маица не кошта 1 долар, па ако е под 10, множиме со 100)
-      if (total < 10) { 
-        total = total * 100; 
-      }
-      
-      // ⚠️ МНОГУ ВАЖНО: Whop прифаќа само цели броеви (integers)
-      const finalPrice = Math.round(total);
+      // 2. SAFETY FIX: Force it to be a whole number (Integer)
+      // Whop rejects 1.10, but accepts 1 (or 110)
+      const finalPrice = Math.round(totalCents);
 
       const cartData = items.map(i => ({ id: i.variant_id, qty: i.quantity }));
 
@@ -47,7 +41,7 @@ export default async function handler(req, res) {
           initial_price: finalPrice, 
           currency: 'usd',
           title: 'Order from Demano',
-          // ИЗБРИШАВМЕ company_id ЗА ДА НЕ ПРАВИ ПРОБЛЕМ СО ПОГРЕШЕН ID
+          company_id: 'biz_9ouoqD0evDHrfC' // Confirmed ID from your link
         },
         metadata: {
           shopify_payload: JSON.stringify(cartData),
@@ -59,7 +53,7 @@ export default async function handler(req, res) {
       return res.status(200).json({ url: checkout.url || checkout.purchase_url });
     }
 
-    // --- 2. УСПЕШНА УПЛАТА (WEBHOOK) ---
+    // --- PAYMENT SUCCESS ---
     if (req.body.type === 'payment.succeeded') {
       const payment = req.body.data;
       const metadata = payment.metadata || {};
