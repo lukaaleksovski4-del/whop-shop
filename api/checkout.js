@@ -1,11 +1,8 @@
 import { Whop } from '@whop/sdk';
 import axios from 'axios';
 
-// Initialize Whop SDK
 const whop = new Whop(process.env.WHOP_API_KEY);
 
-// Function to generate a Shopify Access Token dynamically
-// This works now because you have clicked "Install App" in your dashboard!
 async function getShopifyToken() {
   const url = `https://${process.env.SHOPIFY_DOMAIN}/admin/oauth/access_token`;
   const response = await axios.post(url, {
@@ -17,7 +14,6 @@ async function getShopifyToken() {
 }
 
 export default async function handler(req, res) {
-  // 1. CORS Setup (Allow requests from your website)
   res.setHeader('Access-Control-Allow-Credentials', true);
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,POST');
@@ -26,17 +22,13 @@ export default async function handler(req, res) {
   if (req.method === 'OPTIONS') return res.status(200).end();
 
   try {
-    // --- STEP 1: CREATE CHECKOUT LINK ---
+    // --- CREATE CHECKOUT ---
     if (req.body.action === 'create_checkout') {
       const { items, email } = req.body;
       
-      // Calculate total price in cents (USD)
       let totalCents = items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
-      
-      // Prepare cart data to save for later
       const cartData = items.map(i => ({ id: i.variant_id, qty: i.quantity }));
 
-      // Create the Whop Checkout Session
       const checkout = await whop.checkoutConfigurations.create({
         plan: {
           plan_type: 'one_time', 
@@ -45,7 +37,7 @@ export default async function handler(req, res) {
           title: 'Order from Demano',
           company_id: 'biz_9ouoqD0evDHrfC' 
         },
-        require_email: true,
+        // ГО ИЗБРИШАВМЕ REDOT require_email ШТО ПРАВЕШЕ ГРЕШКА
         metadata: {
           shopify_payload: JSON.stringify(cartData),
           customer_email: email || ''
@@ -56,28 +48,24 @@ export default async function handler(req, res) {
       return res.status(200).json({ url: checkout.url || checkout.purchase_url });
     }
 
-    // --- STEP 2: PAYMENT SUCCEEDED (WEBHOOK) ---
-    // This runs automatically when Whop tells us a payment was made
+    // --- PAYMENT SUCCEEDED ---
     if (req.body.type === 'payment.succeeded') {
       const payment = req.body.data;
       const metadata = payment.metadata || {};
       
-      // If this payment isn't from our shop, ignore it
       if (!metadata.shopify_payload) return res.status(200).send('Ok');
 
-      // Generate the Shopify Token
       const shopifyToken = await getShopifyToken();
       
       const items = JSON.parse(metadata.shopify_payload);
       const userEmail = payment.user?.email || metadata.customer_email;
       
-      // Create the Paid Order in Shopify
       await axios.post(
         `https://${process.env.SHOPIFY_DOMAIN}/admin/api/2024-01/orders.json`,
         {
           order: {
             email: userEmail,
-            financial_status: 'paid', // This adds the Revenue to your dashboard!
+            financial_status: 'paid',
             tags: 'Whop Order',
             line_items: items.map(i => ({ variant_id: i.id, quantity: i.qty })),
             note: `Whop Payment ID: ${payment.id}`
@@ -89,7 +77,7 @@ export default async function handler(req, res) {
       return res.status(200).send('Success');
     }
   } catch (err) {
-    console.error("Server Error:", err.message);
+    console.error("Error:", err.message);
     return res.status(500).json({ error: err.message });
   }
 }
