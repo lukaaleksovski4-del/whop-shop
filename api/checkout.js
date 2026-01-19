@@ -1,10 +1,9 @@
 import { Whop } from '@whop/sdk';
 import axios from 'axios';
 
-// Initialize Whop SDK
 const whop = new Whop(process.env.WHOP_API_KEY);
 
-// Function to generate a Shopify Access Token dynamically
+// Function to get Shopify Token (Using your Client ID/Secret)
 async function getShopifyToken() {
   const url = `https://${process.env.SHOPIFY_DOMAIN}/admin/oauth/access_token`;
   const response = await axios.post(url, {
@@ -16,7 +15,7 @@ async function getShopifyToken() {
 }
 
 export default async function handler(req, res) {
-  // 1. CORS Setup
+  // CORS Headers
   res.setHeader('Access-Control-Allow-Credentials', true);
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,POST');
@@ -25,22 +24,23 @@ export default async function handler(req, res) {
   if (req.method === 'OPTIONS') return res.status(200).end();
 
   try {
-    // --- STEP 1: CREATE CHECKOUT LINK ---
+    // --- PART 1: CREATE CHECKOUT (Restored to the version that worked) ---
     if (req.body.action === 'create_checkout') {
       const { items, email } = req.body;
       
-      // Calculate total (The Shopify frontend must send 'price' as raw cents now)
+      // Calculate Total
       let totalCents = items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
       const cartData = items.map(i => ({ id: i.variant_id, qty: i.quantity }));
 
-      // Create Whop Checkout
+      // ⚠️ Use Math.round to ensure no decimals are sent (Fixes "Nothing to see here")
+      totalCents = Math.round(totalCents);
+
       const checkout = await whop.checkoutConfigurations.create({
         plan: {
-          plan_type: 'one_time', 
+          plan_type: 'one_time',
           initial_price: totalCents, 
           currency: 'usd',
           title: 'Order from Demano',
-          // ⚠️ IMPORTANT: CHECK THIS ID. If it is wrong, you get "Nothing to see here".
           company_id: 'biz_9ouoqD0evDHrfC' 
         },
         metadata: {
@@ -53,13 +53,14 @@ export default async function handler(req, res) {
       return res.status(200).json({ url: checkout.url || checkout.purchase_url });
     }
 
-    // --- STEP 2: PAYMENT SUCCEEDED (WEBHOOK) ---
+    // --- PART 2: PAYMENT SUCCESS (Sends Order to Shopify) ---
     if (req.body.type === 'payment.succeeded') {
       const payment = req.body.data;
       const metadata = payment.metadata || {};
       
       if (!metadata.shopify_payload) return res.status(200).send('Ok');
 
+      // Generate Token
       const shopifyToken = await getShopifyToken();
       
       const items = JSON.parse(metadata.shopify_payload);
@@ -71,7 +72,7 @@ export default async function handler(req, res) {
         {
           order: {
             email: userEmail,
-            financial_status: 'paid', // Marks revenue
+            financial_status: 'paid',
             tags: 'Whop Order',
             line_items: items.map(i => ({ variant_id: i.id, quantity: i.qty })),
             note: `Whop Payment ID: ${payment.id}`
@@ -83,7 +84,7 @@ export default async function handler(req, res) {
       return res.status(200).send('Success');
     }
   } catch (err) {
-    console.error("Server Error:", err.message);
+    console.error("Error:", err.message);
     return res.status(500).json({ error: err.message });
   }
 }
