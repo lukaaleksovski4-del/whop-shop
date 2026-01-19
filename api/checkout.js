@@ -1,7 +1,7 @@
 import { Whop } from '@whop/sdk';
 import axios from 'axios';
 
-// Ensure this uses the NEW key you generated: apik_WZY...
+// Ова го користи НОВИОТ КЛУЧ (apik_WZY...) што го стави во Vercel
 const whop = new Whop(process.env.WHOP_API_KEY);
 
 async function getShopifyToken() {
@@ -23,15 +23,15 @@ export default async function handler(req, res) {
   if (req.method === 'OPTIONS') return res.status(200).end();
 
   try {
-    // --- 1. CREATE CHECKOUT LINK ---
+    // --- 1. КРЕИРАЊЕ НА ЛИНК ---
     if (req.body.action === 'create_checkout') {
       const { items, email } = req.body;
       
-      // Calculate total
+      // Пресметај вкупна сума
       let totalCents = items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
       
-      // ⚠️ THE FIX: Force the price to be a whole number (Integer)
-      // This stops the "Nothing to see here" error.
+      // ⚠️ ПОПРАВКА: Ако Shopify прати 1.1, ова го прави 1.
+      // Без ова, Whop враќа "Nothing to see here yet"!
       const finalPrice = Math.round(totalCents);
 
       const cartData = items.map(i => ({ id: i.variant_id, qty: i.quantity }));
@@ -39,10 +39,10 @@ export default async function handler(req, res) {
       const checkout = await whop.checkoutConfigurations.create({
         plan: {
           plan_type: 'one_time',
-          initial_price: finalPrice, // Uses the rounded price
+          initial_price: finalPrice, 
           currency: 'usd',
           title: 'Order from Demano',
-          company_id: 'biz_9ouoqD0evDHrfC' // Confirmed correct ID
+          company_id: 'biz_9ouoqD0evDHrfC' // Твојот точен ID
         },
         metadata: {
           shopify_payload: JSON.stringify(cartData),
@@ -54,7 +54,7 @@ export default async function handler(req, res) {
       return res.status(200).json({ url: checkout.url || checkout.purchase_url });
     }
 
-    // --- 2. PAYMENT SUCCESS (Send to Shopify) ---
+    // --- 2. УСПЕШНА УПЛАТА (Испрати во Shopify) ---
     if (req.body.type === 'payment.succeeded') {
       const payment = req.body.data;
       const metadata = payment.metadata || {};
@@ -82,7 +82,7 @@ export default async function handler(req, res) {
       return res.status(200).send('Success');
     }
   } catch (err) {
-    console.error(err);
+    console.error("Error:", err.message);
     return res.status(500).json({ error: err.message });
   }
 }
