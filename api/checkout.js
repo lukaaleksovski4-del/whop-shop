@@ -32,11 +32,13 @@ export default async function handler(req, res) {
           plan_type: 'one_time',
           initial_price: totalCents, 
           currency: 'usd',
-          title: 'Order from Demano'
+          title: 'Order from Demano',
+          // Твојот Business ID е веќе тука:
+          company_id: 'biz_9ouoqD0evDHrfC' 
         },
         metadata: {
           shopify_payload: JSON.stringify(cartData),
-          customer_email: email || '' // ПОПРАВЕНО: Користи || наместо |
+          customer_email: email || ''
         },
         redirect_url: `https://${process.env.SHOPIFY_DOMAIN}/pages/thank-you`
       });
@@ -46,13 +48,13 @@ export default async function handler(req, res) {
 
     if (req.body.type === 'payment.succeeded') {
       const payment = req.body.data;
-      const metadata = payment.metadata || {}; // ПОПРАВЕНО: Користи ||
+      const metadata = payment.metadata || {};
      
       if (!metadata.shopify_payload) return res.status(200).send('Ok');
 
       const shopifyToken = await getShopifyToken();
       const items = JSON.parse(metadata.shopify_payload);
-      const userEmail = payment.user?.email || metadata.customer_email; // ПОПРАВЕНО: Користи ||
+      const userEmail = payment.user?.email || metadata.customer_email;
 
       await axios.post(
         `https://${process.env.SHOPIFY_DOMAIN}/admin/api/2024-01/orders.json`,
