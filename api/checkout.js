@@ -1,79 +1,64 @@
-import { Whop } from '@whop/sdk';
-import axios from 'axios';
-
-const whop = new Whop(process.env.WHOP_API_KEY);
-
-async function getShopifyToken() {
-  const url = `https://${process.env.SHOPIFY_DOMAIN}/admin/oauth/access_token`;
-  const response = await axios.post(url, {
-    client_id: process.env.SHOPIFY_CLIENT_ID,
-    client_secret: process.env.SHOPIFY_CLIENT_SECRET,
-    grant_type: 'client_credentials'
-  });
-  return response.data.access_token;
-}
-
 export default async function handler(req, res) {
-  res.setHeader('Access-Control-Allow-Credentials', true);
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,POST');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  // 1. Set CORS headers to allow Shopify to talk to Vercel
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
-  if (req.method === 'OPTIONS') return res.status(200).end();
+  // Handle pre-flight check
+  if (req.method === "OPTIONS") {
+    return res.status(200).end();
+  }
 
   try {
-    if (req.body.action === 'create_checkout') {
-      const { items, email } = req.body;
-      let totalCents = items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
-      const cartData = items.map(i => ({ id: i.variant_id, qty: i.quantity }));
+    // 2. Get data sent from Shopify
+    const { items, email } = req.body;
 
-      const checkout = await whop.checkoutConfigurations.create({
-        plan: {
-          plan_type: 'one_time',
-          initial_price: totalCents, 
-          currency: 'usd',
-          title: 'Order from Demano',
-          // Твојот Business ID е веќе тука:
-          company_id: 'biz_9ouoqD0evDHrfC' 
-        },
-        metadata: {
-          shopify_payload: JSON.stringify(cartData),
-          customer_email: email || ''
-        },
-        redirect_url: `https://${process.env.SHOPIFY_DOMAIN}/pages/thank-you`
-      });
+    // --- PASTE YOUR WHOP API KEY BELOW ---
+    const API_KEY = "apik_WZYCVcy73GyIM_C4154396_C_b5d0a03c0f03bf3a5cfcd9f1af7c8a9143ad62eb2c5538f086fdd15d891f02"; 
+    // -------------------------------------
 
-      return res.status(200).json({ url: checkout.url || checkout.purchase_url });
+    // 3. Format Shopify items into Whop line items
+    // This creates a list: Name, Variant, Price, and Image for each item
+    const lineItems = items.map(item => {
+      // Create a clear name like "Hoodie (Large)"
+      const fullName = item.variant_title 
+        ? `${item.title} (${item.variant_title})` 
+        : item.title;
+
+      return {
+        name: fullName, 
+        base_price: Math.round(item.price * 100), // Convert price to cents
+        quantity: item.quantity,
+        image_url: item.image // Send the image URL to Whop
+      };
+    });
+
+    // 4. Send the request to Whop to create the checkout link
+    const response = await fetch("https://api.whop.com/api/v2/checkout_sessions", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${API_KEY}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        items: lineItems, // Sending the specific list of products
+        email: email, // Auto-fill the customer's email
+        require_email: true
+      })
+    });
+
+    const data = await response.json();
+
+    // 5. Send the Checkout URL back to your website
+    if (data.url) {
+      return res.status(200).json({ url: data.url });
+    } else {
+      console.error("Whop Error:", data);
+      return res.status(500).json({ error: "Failed to create checkout link" });
     }
 
-    if (req.body.type === 'payment.succeeded') {
-      const payment = req.body.data;
-      const metadata = payment.metadata || {};
-     
-      if (!metadata.shopify_payload) return res.status(200).send('Ok');
-
-      const shopifyToken = await getShopifyToken();
-      const items = JSON.parse(metadata.shopify_payload);
-      const userEmail = payment.user?.email || metadata.customer_email;
-
-      await axios.post(
-        `https://${process.env.SHOPIFY_DOMAIN}/admin/api/2024-01/orders.json`,
-        {
-          order: {
-            email: userEmail,
-            financial_status: 'paid',
-            tags: 'Whop Order',
-            line_items: items.map(i => ({ variant_id: i.id, quantity: i.qty })),
-            note: `Whop Payment ID: ${payment.id}`
-          }
-        },
-        { headers: { 'X-Shopify-Access-Token': shopifyToken } }
-      );
-
-      return res.status(200).send('Success');
-    }
-  } catch (err) {
-    console.error(err);
-    return res.status(500).json({ error: err.message });
+  } catch (error) {
+    console.error("Server Error:", error);
+    return res.status(500).json({ error: error.message });
   }
 }
