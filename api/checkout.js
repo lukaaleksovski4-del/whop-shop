@@ -1,5 +1,5 @@
 export default async function handler(req, res) {
-  // 1. Allow Shopify to access this API (CORS)
+  // 1. Setup CORS
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
@@ -15,21 +15,56 @@ export default async function handler(req, res) {
     const API_KEY = "apik_WZYCVcy73GyIM_C4154396_C_b5d0a03c0f03bf3a5cfcd9f1af7c8a9143ad62eb2c5538f086fdd15d891f02"; 
     // --------------------
 
-    // 2. FORCE CALCULATION: Calculate the total price manually
-    // We do not trust the total sent by Shopify, we calculate it here to be safe.
-    let calculatedTotal = 0;
-    
-    items.forEach(item => {
-      // Price * Quantity
-      calculatedTotal += (item.price * item.quantity);
-    });
+    // 2. DYNAMIC LOOKUP: Fetch the correct Plan ID for EACH product
+    const lineItems = await Promise.all(items.map(async (item) => {
+      let foundPlanId = null;
 
-    // Convert to cents (Whop requires cents, e.g., $10.00 -> 1000)
-    const finalPriceCents = Math.round(calculatedTotal * 100);
+      // Only try to find a tag if the item has a handle (URL slug)
+      if (item.handle) {
+        try {
+          // We fetch the public product data from your store to read the tags
+          const productUrl = `https://demano.online/products/${item.handle}.js`;
+          const response = await fetch(productUrl);
+          
+          if (response.ok) {
+            const productData = await response.json();
+            // Search for the tag starting with "whop:plan_"
+            const whopTag = productData.tags.find(t => t.includes('whop:plan_'));
+            
+            if (whopTag) {
+              // Extract the ID (remove "whop:" part)
+              // Example: "whop:plan_123" -> "plan_123"
+              foundPlanId = whopTag.split(':')[1];
+            }
+          }
+        } catch (err) {
+          console.error(`Could not fetch tags for ${item.handle}`);
+        }
+      }
 
-    // 3. SEND REQUEST TO WHOP
-    // We send ONE single item named "Demano Order" with the total price.
-    // This bypasses the need for "plan_id".
+      // 3. Construct the item for Whop
+      if (foundPlanId) {
+        // SUCCESS: We found the specific Plan ID for this product!
+        return {
+          plan_id: foundPlanId,
+          quantity: item.quantity
+        };
+      } else {
+        // FALLBACK: If no tag is found, sell as a custom item with the price
+        // This ensures the checkout never fails, even if a tag is missing.
+        const fullName = item.variant_title 
+          ? `${item.title} (${item.variant_title})` 
+          : item.title;
+
+        return {
+          name: fullName,
+          base_price: Math.round(item.price * 100), // Convert to cents
+          quantity: item.quantity
+        };
+      }
+    }));
+
+    // 4. Send the list to Whop
     const response = await fetch("https://api.whop.com/api/v2/checkout_sessions", {
       method: "POST",
       headers: {
@@ -37,28 +72,18 @@ export default async function handler(req, res) {
         "Content-Type": "application/json"
       },
       body: JSON.stringify({
-        items: [
-          {
-            name: "Order from Demano", // Generic name to prevent errors
-            base_price: finalPriceCents, // This is the KEY parameter
-            quantity: 1
-          }
-        ],
+        items: lineItems, // This now contains the correct Plan IDs for all 60 products
         email: email,
-        require_email: true,
-        // We request the phone number here
-        require_phone_number: true 
+        require_email: true
       })
     });
 
     const data = await response.json();
 
-    // 4. CHECK RESULT
     if (data.url) {
       return res.status(200).json({ url: data.url });
     } else {
       console.error("Whop Error:", JSON.stringify(data));
-      // Send the exact error back to the browser so we can see it
       return res.status(500).json({ error: JSON.stringify(data) });
     }
 
