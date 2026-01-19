@@ -3,7 +3,6 @@ import axios from 'axios';
 
 const whop = new Whop(process.env.WHOP_API_KEY);
 
-// Function to get Shopify Token (Using your Client ID/Secret)
 async function getShopifyToken() {
   const url = `https://${process.env.SHOPIFY_DOMAIN}/admin/oauth/access_token`;
   const response = await axios.post(url, {
@@ -15,7 +14,6 @@ async function getShopifyToken() {
 }
 
 export default async function handler(req, res) {
-  // CORS Headers
   res.setHeader('Access-Control-Allow-Credentials', true);
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,POST');
@@ -24,24 +22,32 @@ export default async function handler(req, res) {
   if (req.method === 'OPTIONS') return res.status(200).end();
 
   try {
-    // --- PART 1: CREATE CHECKOUT (Restored to the version that worked) ---
+    // --- 1. КРЕИРАЊЕ ЛИНК (CREATE CHECKOUT) ---
     if (req.body.action === 'create_checkout') {
       const { items, email } = req.body;
       
-      // Calculate Total
-      let totalCents = items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
-      const cartData = items.map(i => ({ id: i.variant_id, qty: i.quantity }));
+      // Пресметка на цена
+      let total = items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+      
+      // БЕЗБЕДНОСТ: Ако Shopify праќа долари (пр. 1.10), правиме центи. 
+      // Ако праќа центи (110), останува исто.
+      // (Претпоставуваме дека маица не кошта 1 долар, па ако е под 10, множиме со 100)
+      if (total < 10) { 
+        total = total * 100; 
+      }
+      
+      // ⚠️ МНОГУ ВАЖНО: Whop прифаќа само цели броеви (integers)
+      const finalPrice = Math.round(total);
 
-      // ⚠️ Use Math.round to ensure no decimals are sent (Fixes "Nothing to see here")
-      totalCents = Math.round(totalCents);
+      const cartData = items.map(i => ({ id: i.variant_id, qty: i.quantity }));
 
       const checkout = await whop.checkoutConfigurations.create({
         plan: {
-          plan_type: 'one_time',
-          initial_price: totalCents, 
+          plan_type: 'one_time', 
+          initial_price: finalPrice, 
           currency: 'usd',
           title: 'Order from Demano',
-          company_id: 'biz_9ouoqD0evDHrfC' 
+          // ИЗБРИШАВМЕ company_id ЗА ДА НЕ ПРАВИ ПРОБЛЕМ СО ПОГРЕШЕН ID
         },
         metadata: {
           shopify_payload: JSON.stringify(cartData),
@@ -53,20 +59,17 @@ export default async function handler(req, res) {
       return res.status(200).json({ url: checkout.url || checkout.purchase_url });
     }
 
-    // --- PART 2: PAYMENT SUCCESS (Sends Order to Shopify) ---
+    // --- 2. УСПЕШНА УПЛАТА (WEBHOOK) ---
     if (req.body.type === 'payment.succeeded') {
       const payment = req.body.data;
       const metadata = payment.metadata || {};
       
       if (!metadata.shopify_payload) return res.status(200).send('Ok');
 
-      // Generate Token
       const shopifyToken = await getShopifyToken();
-      
       const items = JSON.parse(metadata.shopify_payload);
       const userEmail = payment.user?.email || metadata.customer_email;
       
-      // Create Order in Shopify
       await axios.post(
         `https://${process.env.SHOPIFY_DOMAIN}/admin/api/2024-01/orders.json`,
         {
