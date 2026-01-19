@@ -1,5 +1,5 @@
 export default async function handler(req, res) {
-  // 1. Setup CORS
+  // 1. Allow Shopify to access this API (CORS)
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
@@ -11,58 +11,25 @@ export default async function handler(req, res) {
   try {
     const { items, email } = req.body;
 
-    // --- PASTE YOUR WHOP API KEY HERE ---
+    // --- YOUR API KEY ---
     const API_KEY = "apik_WZYCVcy73GyIM_C4154396_C_b5d0a03c0f03bf3a5cfcd9f1af7c8a9143ad62eb2c5538f086fdd15d891f02"; 
-    // -------------------------------------
+    // --------------------
 
-    // 2. Process items (Fetch tags from your site to find Plan IDs)
-    const lineItems = await Promise.all(items.map(async (item) => {
-      let planId = null;
+    // 2. FORCE CALCULATION: Calculate the total price manually
+    // We do not trust the total sent by Shopify, we calculate it here to be safe.
+    let calculatedTotal = 0;
+    
+    items.forEach(item => {
+      // Price * Quantity
+      calculatedTotal += (item.price * item.quantity);
+    });
 
-      // Try to find the handle to fetch tags
-      if (item.handle) {
-        try {
-          // Fetch product data from your store to get the tags
-          const productRes = await fetch(`https://demano.online/products/${item.handle}.js`);
-          if (productRes.ok) {
-            const productData = await productRes.json();
-            const tags = productData.tags || [];
-            
-            // Look for the whop plan tag
-            const whopTag = tags.find(t => t.toLowerCase().startsWith('whop:'));
-            if (whopTag) {
-              // Extract ID: "whop:plan_123" -> "plan_123"
-              planId = whopTag.split(':')[1];
-            }
-          }
-        } catch (err) {
-          console.error("Failed to fetch tags for", item.handle);
-        }
-      }
+    // Convert to cents (Whop requires cents, e.g., $10.00 -> 1000)
+    const finalPriceCents = Math.round(calculatedTotal * 100);
 
-      // 3. Return the correct object to Whop
-      if (planId) {
-        // OPTION A: If we found a Plan ID, use it!
-        return {
-          plan_id: planId,
-          quantity: item.quantity
-        };
-      } else {
-        // OPTION B: Fallback (Custom Item)
-        // IMPORTANT: We use 'base_price' (in cents), not 'price'
-        const fullName = item.variant_title 
-          ? `${item.title} (${item.variant_title})` 
-          : item.title;
-
-        return {
-          name: fullName,
-          base_price: Math.round(item.price * 100), // Correct key is base_price
-          quantity: item.quantity
-        };
-      }
-    }));
-
-    // 4. Send to Whop
+    // 3. SEND REQUEST TO WHOP
+    // We send ONE single item named "Demano Order" with the total price.
+    // This bypasses the need for "plan_id".
     const response = await fetch("https://api.whop.com/api/v2/checkout_sessions", {
       method: "POST",
       headers: {
@@ -70,18 +37,28 @@ export default async function handler(req, res) {
         "Content-Type": "application/json"
       },
       body: JSON.stringify({
-        items: lineItems,
+        items: [
+          {
+            name: "Order from Demano", // Generic name to prevent errors
+            base_price: finalPriceCents, // This is the KEY parameter
+            quantity: 1
+          }
+        ],
         email: email,
-        require_email: true
+        require_email: true,
+        // We request the phone number here
+        require_phone_number: true 
       })
     });
 
     const data = await response.json();
 
+    // 4. CHECK RESULT
     if (data.url) {
       return res.status(200).json({ url: data.url });
     } else {
-      console.error("Whop Error Details:", JSON.stringify(data));
+      console.error("Whop Error:", JSON.stringify(data));
+      // Send the exact error back to the browser so we can see it
       return res.status(500).json({ error: JSON.stringify(data) });
     }
 
