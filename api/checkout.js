@@ -1,10 +1,11 @@
 import { Whop } from '@whop/sdk';
 import axios from 'axios';
 
-// Ensure WHOP_API_KEY is set in Vercel Environment Variables
+// Initialize Whop SDK
 const whop = new Whop(process.env.WHOP_API_KEY);
 
-// Function to generate Shopify Access Token
+// Function to generate a Shopify Access Token dynamically
+// This works now because you have clicked "Install App" in your dashboard!
 async function getShopifyToken() {
   const url = `https://${process.env.SHOPIFY_DOMAIN}/admin/oauth/access_token`;
   const response = await axios.post(url, {
@@ -16,7 +17,7 @@ async function getShopifyToken() {
 }
 
 export default async function handler(req, res) {
-  // 1. Setup CORS
+  // 1. CORS Setup (Allow requests from your website)
   res.setHeader('Access-Control-Allow-Credentials', true);
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,POST');
@@ -25,23 +26,26 @@ export default async function handler(req, res) {
   if (req.method === 'OPTIONS') return res.status(200).end();
 
   try {
-    // --- ACTION: CREATE CHECKOUT LINK ---
+    // --- STEP 1: CREATE CHECKOUT LINK ---
     if (req.body.action === 'create_checkout') {
       const { items, email } = req.body;
       
-      // Calculate total price in cents
+      // Calculate total price in cents (USD)
       let totalCents = items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+      
+      // Prepare cart data to save for later
       const cartData = items.map(i => ({ id: i.variant_id, qty: i.quantity }));
 
-      // Create the checkout session
+      // Create the Whop Checkout Session
       const checkout = await whop.checkoutConfigurations.create({
         plan: {
-          plan_type: 'one_time', // Attempts to treat it as a one-time purchase
+          plan_type: 'one_time', 
           initial_price: totalCents, 
           currency: 'usd',
           title: 'Order from Demano',
-          company_id: 'biz_9ouoqD0evDHrfC' // Your Company ID
+          company_id: 'biz_9ouoqD0evDHrfC' 
         },
+        require_email: true,
         metadata: {
           shopify_payload: JSON.stringify(cartData),
           customer_email: email || ''
@@ -52,28 +56,28 @@ export default async function handler(req, res) {
       return res.status(200).json({ url: checkout.url || checkout.purchase_url });
     }
 
-    // --- ACTION: PAYMENT SUCCESS (Webhook) ---
+    // --- STEP 2: PAYMENT SUCCEEDED (WEBHOOK) ---
+    // This runs automatically when Whop tells us a payment was made
     if (req.body.type === 'payment.succeeded') {
       const payment = req.body.data;
       const metadata = payment.metadata || {};
       
+      // If this payment isn't from our shop, ignore it
       if (!metadata.shopify_payload) return res.status(200).send('Ok');
 
+      // Generate the Shopify Token
       const shopifyToken = await getShopifyToken();
-      const items = JSON.parse(metadata.shopify_payload);
       
-      // Get customer details
+      const items = JSON.parse(metadata.shopify_payload);
       const userEmail = payment.user?.email || metadata.customer_email;
-      const userPhone = payment.user?.phone_number || null; // Will define if available
-
-      // Create Paid Order in Shopify
+      
+      // Create the Paid Order in Shopify
       await axios.post(
         `https://${process.env.SHOPIFY_DOMAIN}/admin/api/2024-01/orders.json`,
         {
           order: {
             email: userEmail,
-            phone: userPhone, 
-            financial_status: 'paid', // Mark as Paid/Revenue
+            financial_status: 'paid', // This adds the Revenue to your dashboard!
             tags: 'Whop Order',
             line_items: items.map(i => ({ variant_id: i.id, quantity: i.qty })),
             note: `Whop Payment ID: ${payment.id}`
@@ -85,7 +89,7 @@ export default async function handler(req, res) {
       return res.status(200).send('Success');
     }
   } catch (err) {
-    console.error("Server Error:", err);
+    console.error("Server Error:", err.message);
     return res.status(500).json({ error: err.message });
   }
 }
