@@ -1,5 +1,5 @@
 export default async function handler(req, res) {
-  // 1. Set CORS headers to allow Shopify to talk to Vercel
+  // 1. Set CORS headers (Allows Shopify to talk to Vercel)
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
@@ -11,29 +11,30 @@ export default async function handler(req, res) {
 
   try {
     // 2. Get data sent from Shopify
-    const { items, email } = req.body;
+    const { items, email, totalPrice } = req.body;
 
-    // --- PASTE YOUR WHOP API KEY BELOW ---
+    // --- PASTE YOUR WHOP BUSINESS API KEY HERE ---
+    // It starts with "apik_..."
     const API_KEY = "apik_WZYCVcy73GyIM_C4154396_C_b5d0a03c0f03bf3a5cfcd9f1af7c8a9143ad62eb2c5538f086fdd15d891f02"; 
-    // -------------------------------------
+    // ---------------------------------------------
 
-    // 3. Format Shopify items into Whop line items
-    // This creates a list: Name, Variant, Price, and Image for each item
-    const lineItems = items.map(item => {
-      // Create a clear name like "Hoodie (Large)"
-      const fullName = item.variant_title 
-        ? `${item.title} (${item.variant_title})` 
-        : item.title;
+    // 3. Create a summary string of all products
+    // This creates a text like: "1x Black Hoodie (L), 1x White Tee (M)"
+    const productNames = items.map(item => 
+      `${item.quantity}x ${item.title} ${item.variant_title ? `(${item.variant_title})` : ''}`
+    ).join(', ');
 
-      return {
-        name: fullName, 
-        base_price: Math.round(item.price * 100), // Convert price to cents
-        quantity: item.quantity,
-        image_url: item.image // Send the image URL to Whop
-      };
-    });
+    // Whop has a character limit for names, so we cut it off if it's too long
+    const finalTitle = productNames.length > 200 
+      ? productNames.substring(0, 197) + "..." 
+      : productNames;
 
-    // 4. Send the request to Whop to create the checkout link
+    // Convert total price to cents (e.g., 199.99 becomes 19999)
+    // We use the total price calculated by Shopify to be exact
+    const finalPrice = Math.round(parseFloat(totalPrice) * 100);
+
+    // 4. Send request to Whop
+    // We send ONE item with the combined title and total price
     const response = await fetch("https://api.whop.com/api/v2/checkout_sessions", {
       method: "POST",
       headers: {
@@ -41,20 +42,26 @@ export default async function handler(req, res) {
         "Content-Type": "application/json"
       },
       body: JSON.stringify({
-        items: lineItems, // Sending the specific list of products
-        email: email, // Auto-fill the customer's email
+        items: [
+          {
+            name: finalTitle, // This is the list of products!
+            base_price: finalPrice, // This is the total price
+            quantity: 1
+          }
+        ],
+        email: email, // Auto-fill customer email
         require_email: true
       })
     });
 
     const data = await response.json();
 
-    // 5. Send the Checkout URL back to your website
+    // 5. Send the URL back to Shopify
     if (data.url) {
       return res.status(200).json({ url: data.url });
     } else {
       console.error("Whop Error:", data);
-      return res.status(500).json({ error: "Failed to create checkout link" });
+      return res.status(500).json({ error: "Whop Error" });
     }
 
   } catch (error) {
